@@ -102,6 +102,7 @@ FONTS = {
     "title": str(FONT_DIR / "BlackHanSans-Regular.ttf"),   # big dish/hook titles
     "black": str(FONT_DIR / "Pretendard-Black.otf"),        # step subtitles
     "bold": str(FONT_DIR / "Pretendard-ExtraBold.otf"),     # small lines, labels
+    "batang": str(FONT_DIR / "GowunBatang-Bold.ttf"),       # 고운바탕: reel subtitles + cover title
 }
 HIGHLIGHT = (255, 214, 0, 255)      # {word} is drawn in this yellow
 
