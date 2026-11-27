@@ -95,16 +95,29 @@ def cut_clip(clip, dst, base):
     return (t1 - t0) / speed
 
 
+FONT_DIR = Path(__file__).parent / "fonts"
+FONTS = {
+    "default": FONT,
+    "title": str(FONT_DIR / "BlackHanSans-Regular.ttf"),   # big dish/hook titles
+    "black": str(FONT_DIR / "Pretendard-Black.otf"),        # step subtitles
+    "bold": str(FONT_DIR / "Pretendard-ExtraBold.otf"),     # small lines, labels
+}
+HIGHLIGHT = (255, 214, 0, 255)      # {word} is drawn in this yellow
+
+
+def _plain(t):
+    return t.replace("{", "").replace("}", "")
+
+
 def wrap(text, font, max_w, draw):
     lines = []
     for para in text.split("\n"):
         cur = ""
         for ch in para:
             trial = cur + ch
-            if draw.textlength(trial, font=font) <= max_w or not cur:
+            if draw.textlength(_plain(trial), font=font) <= max_w or not cur:
                 cur = trial
             else:
-                # break at the last space if there is one
                 if " " in cur:
                     head, tail = cur.rsplit(" ", 1)
                     lines.append(head)
@@ -117,27 +130,60 @@ def wrap(text, font, max_w, draw):
 
 
 def render_card(card, dst):
+    """card keys: text, y | pos, size, font (default|title|black|bold or a path),
+    color [r,g,b], stroke (px), wide (true = up to 900px wide, for top/middle titles),
+    box (true = dark rounded box behind). Wrap a word in {braces} to make it yellow."""
+    from PIL import ImageFilter
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    font = ImageFont.truetype(FONT, int(card.get("size", FONT_SIZE)))
-    max_w = TEXT_RIGHT - TEXT_LEFT
-    lines = wrap(card["text"], font, max_w, d)
+    fname = FONTS.get(card.get("font", "default"), card.get("font", FONT))
+    if not Path(fname).exists():
+        fname = FONT
+    font = ImageFont.truetype(fname, int(card.get("size", FONT_SIZE)))
+    wide = bool(card.get("wide"))
+    left, right = (90, W - 90) if wide else (TEXT_LEFT, TEXT_RIGHT)
+    lines = wrap(card["text"], font, right - left, d)
     asc, desc = font.getmetrics()
-    lh = int((asc + desc) * 1.25)
+    lh = int((asc + desc) * float(card.get("line", 1.18)))
     block_h = lh * len(lines)
     y = int(card["y"]) if "y" in card else POS_Y.get(card.get("pos", "middle"), POS_Y["middle"])
-    y = min(max(y, SAFE_TOP), SAFE_BOTTOM - block_h)
-    cx = (TEXT_LEFT + TEXT_RIGHT) // 2
+    y = min(max(y, SAFE_TOP), (H - 240 if wide else SAFE_BOTTOM) - block_h)
+    cx = W // 2 if wide else (TEXT_LEFT + TEXT_RIGHT) // 2
+    base = tuple(card.get("color", (255, 255, 255))) + (255,)
+    stroke = int(card.get("stroke", max(3, int(font.size * 0.07))))
+
+    if card.get("box"):
+        bw = max(d.textlength(_plain(l), font=font) for l in lines)
+        pad = int(font.size * 0.35)
+        d.rounded_rectangle([cx - bw / 2 - pad, y - pad * 0.6, cx + bw / 2 + pad, y + block_h + pad * 0.2],
+                            radius=pad, fill=(0, 0, 0, 150))
+
+    shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    hi = False
     for i, line in enumerate(lines):
-        tw = d.textlength(line, font=font)
-        x = cx - tw / 2
+        x = cx - d.textlength(_plain(line), font=font) / 2
         yy = y + i * lh
-        for dx, dy in ((0, 4), (2, 4), (-2, 4), (0, 6)):          # soft drop shadow
-            d.text((x + dx, yy + dy), line, font=font, fill=(0, 0, 0, 150))
-        d.text((x, yy), line, font=font, fill=(255, 255, 255, 255),
-               stroke_width=3, stroke_fill=(0, 0, 0, 200))
-    img.save(dst)
-    return {"lines": lines, "top": y, "bottom": y + block_h}
+        sd.text((x, yy + font.size * 0.06), _plain(line), font=font, fill=(0, 0, 0, 170),
+                stroke_width=stroke + 2, stroke_fill=(0, 0, 0, 170))
+        seg = ""
+        for ch in line + "\0":
+            if ch in "{}\0":
+                if seg:
+                    d.text((x, yy), seg, font=font, fill=HIGHLIGHT if hi else base,
+                           stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+                    x += d.textlength(seg, font=font)
+                    seg = ""
+                if ch == "{":
+                    hi = True
+                elif ch == "}":
+                    hi = False
+            else:
+                seg += ch
+    shadow = shadow.filter(ImageFilter.GaussianBlur(font.size * 0.12))
+    out = Image.alpha_composite(shadow, img)
+    out.save(dst)
+    return {"lines": [_plain(l) for l in lines], "top": y, "bottom": y + block_h}
 
 
 def main():
