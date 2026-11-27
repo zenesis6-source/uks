@@ -140,12 +140,24 @@ def main():
     d.line([L, 1345, L + 34, 1345], fill=ORANGE, width=5)
     spaced(d, L + 50, 1345, a.series, font(SANS_B, 32), ORANGE, 4)
 
-    # title
-    ft = font(TITLE_FONT, 94)
-    y = 1388
-    for line in a.title.replace("\\n", "\n").split("\n")[:2]:
-        rich(d, L - 2, y, line, ft, CREAM, ORANGE, 2)
-        y += 106
+    # title: auto-fit between the series label and the rule line, measured on real glyph boxes
+    lines = a.title.replace("\\n", "\n").split("\n")[:2]
+    top_lim, bot_lim, max_w = 1392, 1574, R - L
+    size = 94
+    while True:
+        ft = font(TITLE_FONT, size)
+        gap = int(size * 0.16)
+        boxes = [d.textbbox((0, 0), l.replace("{", "").replace("}", ""), font=ft, stroke_width=2) for l in lines]
+        heights = [b[3] - b[1] for b in boxes]
+        block = sum(heights) + gap * (len(lines) - 1)
+        widest = max(b[2] - b[0] for b in boxes)
+        if (widest <= max_w and block <= bot_lim - top_lim) or size <= 56:
+            break
+        size -= 2
+    y = top_lim + (bot_lim - top_lim - block) // 2
+    for line, b, h in zip(lines, boxes, heights):
+        rich(d, L - b[0], y - b[1], line, ft, CREAM, ORANGE, 2)
+        y += h + gap
 
     # footer
     d.line([L, 1600, R, 1600], fill=RULE, width=2)
