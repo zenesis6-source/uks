@@ -107,29 +107,29 @@ def main():
     # top row
     d.ellipse([L, 268, L + 46, 314], fill=LOGO)
     d.ellipse([L + 12, 280, L + 34, 302], fill=(238, 196, 150))
-    spaced(d, (L + 62, 272), "UKS CAMPER", font(SANS, 30), CREAM, 5)
+    spaced(d, (L + 62, 270), "UKS CAMPER", font(SANS, 34), CREAM, 5)
     no = f"No.{a.no:02d}"
-    fno = font(SANS, 30)
+    fno = font(SANS, 34)
     width = sum(d.textlength(c, font=fno) + 4 for c in no) - 4
     spaced(d, (R - width, 272), no, fno, CREAM, 4)
 
     # series label
-    fl = font(SANS, 30)
-    d.line([L, 1342, L + 34, 1342], fill=ORANGE, width=4)
-    d.text((L + 48, 1322), a.series, font=fl, fill=ORANGE)
+    fl = font(SANS, 40)
+    d.line([L, 1338, L + 40, 1338], fill=ORANGE, width=5)
+    d.text((L + 54, 1312), a.series, font=fl, fill=ORANGE)
 
     # title
-    ft = font(SERIF, 86)
-    y = 1380
+    ft = font(SERIF, 96)
+    y = 1372
     for line in a.title.replace("\\n", "\n").split("\n")[:2]:
         rich_line(d, (L - 4, y), line, ft, CREAM, ORANGE)
-        y += 108
+        y += 116
 
     # rule + footer
-    d.line([L, 1606, R, 1606], fill=(88, 112, 96), width=2)
-    fs = font(SANS_REG, 26)
-    d.text((L, 1622), a.tagline, font=fs, fill=MUTED)
-    d.text((R - d.textlength(HANDLE, font=fs), 1622), HANDLE, font=fs, fill=MUTED)
+    d.line([L, 1612, R, 1612], fill=(88, 112, 96), width=2)
+    fs = font(SANS, 28)
+    d.text((L, 1626), a.tagline, font=fs, fill=MUTED)
+    d.text((R - d.textlength(HANDLE, font=fs), 1626), HANDLE, font=fs, fill=MUTED)
 
     page.save(a.out, quality=93)
     top = (H - 1440) // 2
