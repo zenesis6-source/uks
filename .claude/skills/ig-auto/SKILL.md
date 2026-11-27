@@ -85,7 +85,7 @@ voice.md 대본 규칙을 따른다: **말 없음, 현장음 + 화면 자막만.
 
 `.claude/instagram/feed.md`의 매거진 템플릿:
 ```bash
-python3 autopilot/cover_mag.py work/.../raw_N.mp4 work/.../cover.jpg --series "억스 세팅" --title "캠핑 크림파스타\n{4단계}로 끝" --no <다음 번호> --at <초>
+python3 autopilot/cover_mag.py work/.../raw_N.mp4 work/.../cover.jpg --series "캠핑요리" --title "4단계로 끝내는\n캠핑 {크림파스타}" --at <초>
 ```
 plan.json에 `"cover": "cover.jpg"`를 넣으면 영상 앞 2프레임이 커버가 되어 게시 후 자동으로 커버로 잡힌다.
 `cover_grid.jpg`(프로필 3:4)도 직접 확인.
