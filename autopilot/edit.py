@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""Cut raw footage into a 1080x1920 Reel from an edit plan.
+
+    python3 autopilot/edit.py plan.json
+
+plan.json:
+{
+  "output": "work/out.mp4",
+  "clips": [
+    {"src": "raw.mp4", "in": 2.0, "out": 5.5},
+    {"src": "raw.mp4", "in": 10, "out": 14, "speed": 1.0, "focus_x": 0.5}
+  ],
+  "cards": [
+    {"start": 0.0, "end": 3.0, "text": "불 앞에 앉은 우리 가족,\\n뭘 했을까요?", "pos": "top"},
+    {"start": 4.0, "end": 7.0, "text": "아무것도요.", "pos": "middle"}
+  ],
+  "audio": {"original_volume": 1.0, "music": null, "music_volume": 0.25},
+  "fade_out": 0.6,
+  "cover": "cover.jpg"      (optional: 2-frame designed cover at the start)
+}
+
+- clips play in order. Times are seconds in the source file.
+- focus_x (0..1) picks where to crop a horizontal shot. 0.5 = centre.
+- speed 0.5..2.0 slows or speeds a clip (audio follows).
+- cards are times on the FINISHED reel. pos: top | middle | low.
+  Cards are drawn inside Instagram's safe zone (y 230-1440, right 230px clear).
+- audio is normalised to -14 LUFS, Instagram's playback level.
+
+Output: H.264 + AAC, 30fps, 1080x1920, the format Instagram accepts as-is.
+"""
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+
+W, H, FPS = 1080, 1920, 30
+FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+FONT_SIZE = 64
+TEXT_LEFT, TEXT_RIGHT = 230, W - 230      # centred, right 230px kept clear
+SAFE_TOP, SAFE_BOTTOM = 230, 1440
+POS_Y = {"top": 330, "middle": 860, "low": 1240}
+
+
+def sh(cmd):
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"ffmpeg failed:\n{' '.join(cmd)}\n{r.stderr[-2000:]}")
+    return r
+
+
+def has_audio(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a",
+                        "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+                       capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+
+def atempo(speed):
+    parts, s = [], speed
+    while s > 2.0:
+        parts.append("atempo=2.0")
+        s /= 2.0
+    while s < 0.5:
+        parts.append("atempo=0.5")
+        s /= 0.5
+    parts.append(f"atempo={s:.4f}")
+    return ",".join(parts)
+
+
+def cut_clip(clip, dst, base):
+    src = Path(clip["src"])
+    if not src.is_absolute():
+        src = (base / src).resolve()
+    t0, t1 = float(clip["in"]), float(clip["out"])
+    if t1 <= t0:
+        sys.exit(f"clip {clip}: out must be after in")
+    speed = float(clip.get("speed", 1.0))
+    fx = min(max(float(clip.get("focus_x", 0.5)), 0.0), 1.0)
+    vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,"
+          f"crop={W}:{H}:(iw-{W})*{fx}:(ih-{H})/2,"
+          f"setpts=PTS/{speed},fps={FPS},setsar=1,format=yuv420p")
+    cmd = ["ffmpeg", "-hide_banner", "-y", "-ss", str(t0), "-to", str(t1), "-i", str(src)]
+    if has_audio(src):
+        af = f"{atempo(speed)},aresample=48000,aformat=channel_layouts=stereo"
+        cmd += ["-vf", vf, "-af", af]
+    else:
+        cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                "-vf", vf, "-map", "0:v", "-map", "1:a", "-shortest"]
+    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-c:a", "aac", "-b:a", "192k", str(dst)]
+    sh(cmd)
+    return (t1 - t0) / speed
+
+
+FONT_DIR = Path(__file__).parent / "fonts"
+FONTS = {
+    "default": FONT,
+    "title": str(FONT_DIR / "BlackHanSans-Regular.ttf"),   # big dish/hook titles
+    "black": str(FONT_DIR / "Pretendard-Black.otf"),        # step subtitles
+    "bold": str(FONT_DIR / "Pretendard-ExtraBold.otf"),     # small lines, labels
+    "batang": str(FONT_DIR / "GowunBatang-Bold.ttf"),       # 고운바탕: reel subtitles + cover title
+}
+HIGHLIGHT = (255, 214, 0, 255)      # {word} is drawn in this yellow
+
+
+def _plain(t):
+    return t.replace("{", "").replace("}", "")
+
+
+def wrap(text, font, max_w, draw):
+    lines = []
+    for para in text.split("\n"):
+        cur = ""
+        for ch in para:
+            trial = cur + ch
+            if draw.textlength(_plain(trial), font=font) <= max_w or not cur:
+                cur = trial
+            else:
+                if " " in cur:
+                    head, tail = cur.rsplit(" ", 1)
+                    lines.append(head)
+                    cur = tail + ch
+                else:
+                    lines.append(cur)
+                    cur = ch
+        lines.append(cur)
+    return [l.strip() for l in lines]
+
+
+def render_card(card, dst):
+    """card keys: text, y | pos, size, font (default|title|black|bold or a path),
+    color [r,g,b], stroke (px), wide (true = up to 900px wide, for top/middle titles),
+    box (true = dark rounded box behind). Wrap a word in {braces} to make it yellow."""
+    from PIL import ImageFilter
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    fname = FONTS.get(card.get("font", "default"), card.get("font", FONT))
+    if not Path(fname).exists():
+        fname = FONT
+    font = ImageFont.truetype(fname, int(card.get("size", FONT_SIZE)))
+    wide = bool(card.get("wide"))
+    left, right = (90, W - 90) if wide else (TEXT_LEFT, TEXT_RIGHT)
+    lines = wrap(card["text"], font, right - left, d)
+    asc, desc = font.getmetrics()
+    lh = int((asc + desc) * float(card.get("line", 1.18)))
+    block_h = lh * len(lines)
+    y = int(card["y"]) if "y" in card else POS_Y.get(card.get("pos", "middle"), POS_Y["middle"])
+    y = min(max(y, SAFE_TOP), (H - 240 if wide else SAFE_BOTTOM) - block_h)
+    cx = W // 2 if wide else (TEXT_LEFT + TEXT_RIGHT) // 2
+    base = tuple(card.get("color", (255, 255, 255))) + (255,)
+    stroke = int(card.get("stroke", max(3, int(font.size * 0.07))))
+
+    if card.get("box"):
+        bw = max(d.textlength(_plain(l), font=font) for l in lines)
+        pad = int(font.size * 0.35)
+        d.rounded_rectangle([cx - bw / 2 - pad, y - pad * 0.6, cx + bw / 2 + pad, y + block_h + pad * 0.2],
+                            radius=pad, fill=(0, 0, 0, 150))
+
+    shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    hi = False
+    for i, line in enumerate(lines):
+        x = cx - d.textlength(_plain(line), font=font) / 2
+        yy = y + i * lh
+        sd.text((x, yy + font.size * 0.06), _plain(line), font=font, fill=(0, 0, 0, 170),
+                stroke_width=stroke + 2, stroke_fill=(0, 0, 0, 170))
+        seg = ""
+        for ch in line + "\0":
+            if ch in "{}\0":
+                if seg:
+                    d.text((x, yy), seg, font=font, fill=HIGHLIGHT if hi else base,
+                           stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+                    x += d.textlength(seg, font=font)
+                    seg = ""
+                if ch == "{":
+                    hi = True
+                elif ch == "}":
+                    hi = False
+            else:
+                seg += ch
+    shadow = shadow.filter(ImageFilter.GaussianBlur(font.size * 0.12))
+    out = Image.alpha_composite(shadow, img)
+    out.save(dst)
+    return {"lines": [_plain(l) for l in lines], "top": y, "bottom": y + block_h}
+
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit(__doc__)
+    plan_path = Path(sys.argv[1]).resolve()
+    base = plan_path.parent
+    plan = json.loads(plan_path.read_text())
+    out = Path(plan.get("output", "reel.mp4"))
+    if not out.is_absolute():
+        out = base / out
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp = Path(tempfile.mkdtemp(prefix="reel_"))
+    try:
+        total = 0.0
+        list_file = tmp / "list.txt"
+        with list_file.open("w") as lf:
+            for i, clip in enumerate(plan["clips"]):
+                seg = tmp / f"seg_{i:03d}.mp4"
+                total += cut_clip(clip, seg, base)
+                lf.write(f"file '{seg}'\n")
+        cover = plan.get("cover")
+        shift = 0.0
+        if cover:
+            # 2-frame designed cover at the very start: Instagram's API uses the
+            # first frame as the reel cover, so the grid shows the template.
+            cp = Path(cover) if Path(cover).is_absolute() else base / cover
+            seg = tmp / "seg_cover.mp4"
+            shift = 2 / FPS
+            sh(["ffmpeg", "-hide_banner", "-y", "-loop", "1", "-t", f"{shift:.4f}", "-i", str(cp),
+                "-f", "lavfi", "-t", f"{shift:.4f}", "-i", "anullsrc=r=48000:cl=stereo",
+                "-vf", f"scale={W}:{H},fps={FPS},setsar=1,format=yuv420p",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "192k", "-shortest", str(seg)])
+            lines = list_file.read_text()
+            list_file.write_text(f"file '{seg}'\n" + lines)
+            total += shift
+            for c in plan.get("cards", []):
+                c["start"] = float(c["start"]) + shift
+                c["end"] = float(c["end"]) + shift
+        joined = tmp / "joined.mp4"
+        sh(["ffmpeg", "-hide_banner", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(list_file), "-c", "copy", str(joined)])
+
+        inputs = ["-i", str(joined)]
+        audio_cfg = plan.get("audio", {}) or {}
+        music = audio_cfg.get("music")
+        n = 1
+        music_idx = None
+        if music:
+            mp = Path(music) if Path(music).is_absolute() else base / music
+            inputs += ["-stream_loop", "-1", "-i", str(mp)]
+            music_idx = n
+            n += 1
+
+        filters, last = [], "0:v"
+        report = []
+        for j, card in enumerate(plan.get("cards", [])):
+            png = tmp / f"card_{j:02d}.png"
+            info = render_card(card, png)
+            inputs += ["-loop", "1", "-t", f"{total:.3f}", "-i", str(png)]
+            s, e = float(card["start"]), float(card["end"])
+            nxt = f"v{j}"
+            filters.append(f"[{last}][{n}:v]overlay=0:0:enable='between(t,{s},{e})'[{nxt}]")
+            last, n = nxt, n + 1
+            report.append((s, e, info))
+
+        fade = float(plan.get("fade_out", 0) or 0)
+        vchain = f"[{last}]"
+        if fade > 0:
+            filters.append(f"{vchain}fade=t=out:st={max(total - fade, 0):.3f}:d={fade}[vout]")
+        else:
+            filters.append(f"{vchain}null[vout]")
+
+        ov = float(audio_cfg.get("original_volume", 1.0))
+        a = f"[0:a]volume={ov}[a0]"
+        filters.append(a)
+        amix_src = "[a0]"
+        if music_idx is not None:
+            mv = float(audio_cfg.get("music_volume", 0.25))
+            filters.append(f"[{music_idx}:a]volume={mv},aresample=48000[am]")
+            filters.append(f"[a0][am]amix=inputs=2:duration=first:dropout_transition=0[amx]")
+            amix_src = "[amx]"
+        afade = f",afade=t=out:st={max(total - fade, 0):.3f}:d={fade}" if fade > 0 else ""
+        filters.append(f"{amix_src}loudnorm=I=-14:TP=-1.5:LRA=11{afade},aresample=48000[aout]")
+
+        sh(["ffmpeg", "-hide_banner", "-y", *inputs,
+            "-filter_complex", ";".join(filters),
+            "-map", "[vout]", "-map", "[aout]", "-t", f"{total:.3f}",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
+            "-r", str(FPS), "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+            "-movflags", "+faststart", str(out)])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print(f"REEL  {out}  ·  {total:.1f}s  ·  {len(plan['clips'])} clips  ·  {len(report)} cards")
+    for s, e, info in report:
+        print(f"  {s:5.1f}-{e:5.1f}s  y {info['top']}-{info['bottom']}  {' / '.join(info['lines'])}")
+    if total < 3:
+        print("  WARN shorter than 3s: Instagram will refuse it")
+    if total > 90:
+        print("  WARN over 90s: fine for Instagram, long for this channel")
+
+
+if __name__ == "__main__":
+    main()
