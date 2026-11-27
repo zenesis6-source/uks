@@ -125,7 +125,7 @@ def render_card(card, dst):
     asc, desc = font.getmetrics()
     lh = int((asc + desc) * 1.25)
     block_h = lh * len(lines)
-    y = POS_Y.get(card.get("pos", "middle"), POS_Y["middle"])
+    y = int(card["y"]) if "y" in card else POS_Y.get(card.get("pos", "middle"), POS_Y["middle"])
     y = min(max(y, SAFE_TOP), SAFE_BOTTOM - block_h)
     cx = (TEXT_LEFT + TEXT_RIGHT) // 2
     for i, line in enumerate(lines):
