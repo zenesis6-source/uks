@@ -15,7 +15,8 @@ plan.json:
     {"start": 4.0, "end": 7.0, "text": "아무것도요.", "pos": "middle"}
   ],
   "audio": {"original_volume": 1.0, "music": null, "music_volume": 0.25},
-  "fade_out": 0.6
+  "fade_out": 0.6,
+  "cover": "cover.jpg"      (optional: 2-frame designed cover at the start)
 }
 
 - clips play in order. Times are seconds in the source file.
@@ -206,6 +207,25 @@ def main():
                 seg = tmp / f"seg_{i:03d}.mp4"
                 total += cut_clip(clip, seg, base)
                 lf.write(f"file '{seg}'\n")
+        cover = plan.get("cover")
+        shift = 0.0
+        if cover:
+            # 2-frame designed cover at the very start: Instagram's API uses the
+            # first frame as the reel cover, so the grid shows the template.
+            cp = Path(cover) if Path(cover).is_absolute() else base / cover
+            seg = tmp / "seg_cover.mp4"
+            shift = 2 / FPS
+            sh(["ffmpeg", "-hide_banner", "-y", "-loop", "1", "-t", f"{shift:.4f}", "-i", str(cp),
+                "-f", "lavfi", "-t", f"{shift:.4f}", "-i", "anullsrc=r=48000:cl=stereo",
+                "-vf", f"scale={W}:{H},fps={FPS},setsar=1,format=yuv420p",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "192k", "-shortest", str(seg)])
+            lines = list_file.read_text()
+            list_file.write_text(f"file '{seg}'\n" + lines)
+            total += shift
+            for c in plan.get("cards", []):
+                c["start"] = float(c["start"]) + shift
+                c["end"] = float(c["end"]) + shift
         joined = tmp / "joined.mp4"
         sh(["ffmpeg", "-hide_banner", "-y", "-f", "concat", "-safe", "0",
             "-i", str(list_file), "-c", "copy", str(joined)])
