@@ -88,7 +88,7 @@ voice.md 대본 규칙을 따른다: **말 없음, 현장음 + 화면 자막만.
 python3 autopilot/cover_mag.py work/.../raw_N.mp4 work/.../cover.jpg --series "억스 세팅" --title "캠핑 크림파스타\n{4단계}로 끝" --no <다음 번호> --at <초>
 ```
 plan.json에 `"cover": "cover.jpg"`를 넣으면 영상 앞 2프레임이 커버가 되어 게시 후 자동으로 커버로 잡힌다.
-`cover_grid.jpg`(프로필 3:4)도 직접 확인. 번호는 feed.md의 마지막 번호 +1로 하고 갱신.
+`cover_grid.jpg`(프로필 3:4)도 직접 확인.
 자막 스타일은 feed.md "자막 스타일" 표대로 (요리·세팅은 굵게+노란 강조, 느려터진 주말은 차분하게).
 
 ## 5. 편집

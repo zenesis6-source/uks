@@ -1,45 +1,48 @@
 #!/usr/bin/env python3
-"""@uks_camper magazine-style reel cover (the template on the existing reels).
+"""@uks_camper reel cover, matched to the user's own template (2026-11-27 sample).
 
     python3 autopilot/cover_mag.py SOURCE OUT.jpg \
-        --series "억스 세팅" --title "캠핑 크림파스타\\n{4단계}로 끝" --no 6 [--at 18.5] [--focus-x 0.5] [--focus-y 0.5]
+        --series "캠핑요리" --title "4단계로 끝내는\\n캠핑 {크림파스타}" [--at 18.5] [--focus-x .5] [--focus-y .5]
 
-Layout (1080x1920, everything inside the 3:4 profile-grid crop y 240-1680):
-  dark green page #2E493A
-  top row:    orange dot logo + "UKS CAMPER" (letter-spaced) ........ "No.06"
-  photo:      4:5 window, x 158-922, y 330-1283
-  label:      "— 시리즈" in orange
-  title:      two lines, bold serif, left aligned, {word} in orange
-  rule line, then tagline left and @uks_camper right
+Layout, 1080x1920 (all inside the 3:4 grid crop y 240-1680):
+  dark green page with faint grain
+  y 292   orange tent logo + "U K S  C A M P E R" ............ "ARCHIVE"
+  y 330   photo window x 160-920, y 330-1280, soft drop shadow
+  y 1345  orange rule + series label
+  y 1395  two-line title (Song Myung), {word} in orange
+  y 1600  thin rule, then tagline left / @uks_camper right
 
-SOURCE is a video (frame at --at seconds) or an image.
-Writes OUT and OUT_grid.jpg (how it looks on the profile grid).
+SOURCE: a video (frame at --at seconds) or an image. Also writes OUT_grid.jpg.
 """
 import argparse
+import random
 import subprocess
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 W, H = 1080, 1920
-BG = (46, 73, 58)
-CREAM = (243, 238, 226)
-MUTED = (160, 178, 165)
-ORANGE = (226, 141, 78)
-LOGO = (224, 172, 120)
-SERIF = "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"
-SANS = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
-SANS_REG = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-KR = 1                      # Korean face inside the CJK collections
-PHOTO = (158, 330, 922, 1283)
-TAGLINE = "평일은 빠르게, 주말은 느리게"
+BG = (46, 74, 58)
+CREAM = (244, 238, 226)
+MUTED = (176, 190, 178)
+ORANGE = (232, 135, 58)
+RULE = (92, 116, 100)
+FONTS = Path(__file__).parent / "fonts"
+TITLE_FONT = FONTS / "SongMyung-Regular.ttf"
+SANS_B = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+SANS_R = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+PHOTO = (160, 330, 920, 1280)
+TAGLINE = "준비는 빠르게, 주말은 느리게"
 HANDLE = "@uks_camper"
 
 
 def font(path, size):
+    path = str(path)
+    if not Path(path).exists():
+        path = SANS_B
     try:
-        return ImageFont.truetype(path, size, index=KR)
+        return ImageFont.truetype(path, size, index=1 if path.endswith(".ttc") else 0)
     except OSError:
         return ImageFont.truetype(path, size)
 
@@ -63,27 +66,45 @@ def fit(img, box, fx, fy):
     return img.crop((x, y, x + bw, y + bh))
 
 
-def spaced(d, xy, text, f, fill, gap):
-    x, y = xy
-    for ch in text:
-        d.text((x, y), ch, font=f, fill=fill)
-        x += d.textlength(ch, font=f) + gap
-    return x
+def spaced(d, x, y, text, f, fill, gap, anchor_right=False):
+    widths = [d.textlength(c, font=f) for c in text]
+    total = sum(widths) + gap * (len(text) - 1)
+    if anchor_right:
+        x -= total
+    for c, w in zip(text, widths):
+        d.text((x, y), c, font=f, fill=fill, anchor="lm")
+        x += w + gap
 
 
-def rich_line(d, xy, line, f, base, hi):
-    x, y = xy
+def rich(d, x, y, line, f, base, hi, stroke):
     on, seg = False, ""
     for ch in line + "\0":
         if ch in "{}\0":
             if seg:
                 col = hi if on else base
-                d.text((x, y), seg, font=f, fill=col, stroke_width=1, stroke_fill=col)
+                d.text((x, y), seg, font=f, fill=col, stroke_width=stroke, stroke_fill=col)
                 x += d.textlength(seg, font=f)
                 seg = ""
-            on = (ch == "{") if ch in "{}" else on
+            if ch == "{":
+                on = True
+            elif ch == "}":
+                on = False
         else:
             seg += ch
+
+
+def page_bg():
+    noise = Image.effect_noise((W, H), 12)
+    chans = [Image.eval(noise, lambda v, c=c: max(0, min(255, c + (v - 128) // 16))) for c in BG]
+    return Image.merge("RGB", chans)
+
+
+def logo(d, cx, cy, r=23):
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=ORANGE)
+    t = [(cx, cy - 12), (cx - 13, cy + 10), (cx + 13, cy + 10)]
+    d.polygon(t, outline=CREAM, width=3)
+    d.line([(cx, cy - 3), (cx - 5, cy + 9)], fill=CREAM, width=2)
+    d.line([(cx, cy - 3), (cx + 5, cy + 9)], fill=CREAM, width=2)
 
 
 def main():
@@ -92,44 +113,45 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--series", required=True)
     ap.add_argument("--title", required=True)
-    ap.add_argument("--no", type=int, required=True)
     ap.add_argument("--at", type=float, default=0.0)
     ap.add_argument("--focus-x", type=float, default=0.5)
     ap.add_argument("--focus-y", type=float, default=0.5)
     ap.add_argument("--tagline", default=TAGLINE)
+    ap.add_argument("--corner", default="ARCHIVE", help="top-right word")
     a = ap.parse_args()
 
-    page = Image.new("RGB", (W, H), BG)
-    page.paste(fit(grab(a.source, a.at), PHOTO, a.focus_x, a.focus_y), PHOTO[:2])
+    page = page_bg()
+    L, T, R, B = PHOTO
+
+    # photo with soft shadow
+    sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(sh).rectangle([L + 6, T + 14, R + 6, B + 18], fill=(0, 0, 0, 120))
+    sh = sh.filter(ImageFilter.GaussianBlur(16))
+    page = Image.alpha_composite(page.convert("RGBA"), sh).convert("RGB")
+    page.paste(fit(grab(a.source, a.at), PHOTO, a.focus_x, a.focus_y), (L, T))
     d = ImageDraw.Draw(page)
-    L, R = PHOTO[0], PHOTO[2]
 
     # top row
-    d.ellipse([L, 268, L + 46, 314], fill=LOGO)
-    d.ellipse([L + 12, 280, L + 34, 302], fill=(238, 196, 150))
-    spaced(d, (L + 62, 270), "UKS CAMPER", font(SANS, 34), CREAM, 5)
-    no = f"No.{a.no:02d}"
-    fno = font(SANS, 34)
-    width = sum(d.textlength(c, font=fno) + 4 for c in no) - 4
-    spaced(d, (R - width, 272), no, fno, CREAM, 4)
+    logo(d, L + 23, 292)
+    spaced(d, L + 60, 292, "UKS CAMPER", font(SANS_B, 30), CREAM, 9)
+    spaced(d, R, 292, a.corner, font(SANS_B, 30), CREAM, 6, anchor_right=True)
 
     # series label
-    fl = font(SANS, 40)
-    d.line([L, 1338, L + 40, 1338], fill=ORANGE, width=5)
-    d.text((L + 54, 1312), a.series, font=fl, fill=ORANGE)
+    d.line([L, 1345, L + 34, 1345], fill=ORANGE, width=5)
+    spaced(d, L + 50, 1345, a.series, font(SANS_B, 32), ORANGE, 4)
 
     # title
-    ft = font(SERIF, 96)
-    y = 1372
+    ft = font(TITLE_FONT, 94)
+    y = 1388
     for line in a.title.replace("\\n", "\n").split("\n")[:2]:
-        rich_line(d, (L - 4, y), line, ft, CREAM, ORANGE)
-        y += 116
+        rich(d, L - 2, y, line, ft, CREAM, ORANGE, 2)
+        y += 106
 
-    # rule + footer
-    d.line([L, 1612, R, 1612], fill=(88, 112, 96), width=2)
-    fs = font(SANS, 28)
-    d.text((L, 1626), a.tagline, font=fs, fill=MUTED)
-    d.text((R - d.textlength(HANDLE, font=fs), 1626), HANDLE, font=fs, fill=MUTED)
+    # footer
+    d.line([L, 1600, R, 1600], fill=RULE, width=2)
+    fs = font(SANS_R, 30)
+    d.text((L, 1640), a.tagline, font=fs, fill=MUTED, anchor="lm")
+    d.text((R, 1640), HANDLE, font=fs, fill=MUTED, anchor="rm")
 
     page.save(a.out, quality=93)
     top = (H - 1440) // 2
