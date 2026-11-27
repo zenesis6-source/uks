@@ -13,9 +13,9 @@ reply   : posts each {"comment_id", "text"} from replies.json as a reply, one by
           answered twice. Stops at the first error.
 check   : confirms the token works and shows the account.
 
-Token: the HTTPS proxy injects it for graph.instagram.com (saved as a network secret),
-so this script sends a placeholder. Scopes needed: instagram_business_basic,
-instagram_business_manage_comments.
+Token: the HTTPS proxy injects it for graph.facebook.com (EAA token) or graph.instagram.com (IGAA) (saved as a network secret),
+so this script sends a placeholder. Scopes: instagram_basic, instagram_manage_comments, pages_show_list, pages_read_engagement
+(EAA) or instagram_business_basic, instagram_business_manage_comments (IGAA).
 """
 import json
 import re
@@ -27,7 +27,11 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-API = "https://graph.instagram.com/v23.0"
+import os
+# EAA... (Facebook) tokens go through graph.facebook.com with the IG business account
+# linked to a Facebook Page; IGAA... tokens go through graph.instagram.com.
+API = os.environ.get("IG_GRAPH", "https://graph.facebook.com/v23.0")
+FB = "graph.facebook.com" in API
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / ".claude/instagram/comments/replied.json"
 SPAM = re.compile(r"(https?://|www\.|dm\s*me|팔로우\s*해?주|맞팔|선팔|협찬\s*문의|부업|수익|코인|무료\s*체험|promo|collab\?)", re.I)
@@ -73,8 +77,26 @@ def save_state(s):
     STATE.write_text(json.dumps(s, ensure_ascii=False, indent=1))
 
 
+_ME = {}
+
+
 def me():
-    return call("GET", "me", {"fields": "user_id,username"})
+    if _ME:
+        return _ME
+    if FB:
+        pages = call("GET", "me/accounts", {"fields": "name,instagram_business_account{id,username}"})
+        for pg in pages.get("data", []):
+            ig = pg.get("instagram_business_account")
+            if ig:
+                _ME.update(id=ig["id"], username=ig.get("username", ""), page=pg.get("name"))
+                return _ME
+        sys.exit("No Instagram business account is linked to a Facebook Page this token can see. "
+                 "Link @uks_camper to a Facebook Page (Instagram app > Settings > Accounts Center) "
+                 "and give the token instagram_basic, instagram_manage_comments, pages_show_list, "
+                 "pages_read_engagement.")
+    r = call("GET", "me", {"fields": "user_id,username"})
+    _ME.update(id="me", username=r.get("username", ""))
+    return _ME
 
 
 def pending(days=14, max_n=30):
@@ -82,7 +104,7 @@ def pending(days=14, max_n=30):
     my_name = who.get("username", "")
     since = datetime.now(timezone.utc) - timedelta(days=days)
     state = load_state()
-    media = paged("me/media", {"fields": "id,caption,permalink,timestamp,comments_count", "limit": 25}, 50)
+    media = paged(f"{who['id']}/media", {"fields": "id,caption,permalink,timestamp,comments_count", "limit": 25}, 50)
     out = []
     for m in media:
         ts = datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")
